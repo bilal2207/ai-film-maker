@@ -1,0 +1,14 @@
+{
+  "name": "@ai-filmmaker/film-dsl",
+  "version": "0.1.0",
+  "description": "Domain-Specific Language contracts and types for AI Filmmaker",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["film-dsl", "ai-filmmaker"],
+  "author": "",
+  "license": "UNLICENSED"
+}

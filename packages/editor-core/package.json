@@ -1,0 +1,14 @@
+{
+  "name": "@ai-filmmaker/editor-core",
+  "version": "0.1.0",
+  "description": "Core timeline and playback abstractions for AI Filmmaker",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit"
+  },
+  "keywords": ["editor-core", "ai-filmmaker"],
+  "author": "",
+  "license": "UNLICENSED"
+}
