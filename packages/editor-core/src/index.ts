@@ -1,5 +1,3 @@
-import type { FilmProject, Scene, Shot } from '@ai-filmmaker/film-dsl';
-
 /**
  * Editor Core Abstractions (Foundation)
  * Provides interfaces for future NLE / Timeline / WebCodecs / WebGPU pipeline.

@@ -9,6 +9,11 @@
     "dev:web": "npm run dev --workspace=apps/web",
     "build:web": "npm run build --workspace=apps/web",
     "lint:web": "npm run lint --workspace=apps/web",
-    "test:web": "npm run test --workspace=apps/web"
+    "test:web": "npm run test --workspace=apps/web",
+    "build:dsl": "npm run build --workspace=@ai-filmmaker/film-dsl",
+    "build:editor": "npm run build --workspace=@ai-filmmaker/editor-core",
+    "build": "npm run build --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present"
   }
 }

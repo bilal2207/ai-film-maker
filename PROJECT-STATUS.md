@@ -49,6 +49,7 @@ AI-native filmmaking platform spanning the complete production lifecycle:
 1. **Lightweight Monorepo:** Avoided bulky JS-only monorepo managers (e.g. Nx, Turborepo) at Hop 0 to keep multi-language (Go, Python, TypeScript) boundaries clean and simple.
 2. **Minimal ML Footprint at Hop 0:** Deferred heavy ML dependencies (PyTorch, Transformers, CUDA) until AI feature hops commence to keep CI/dev cycle fast.
 3. **Strict Boundaries:** Frontend communicates strictly with Go API; AI communicates via contracts with Go API.
+4. **Database Status:** PostgreSQL infrastructure and connection abstraction scaffolded; actual application database connectivity is deferred to Hop 1.
 
 ---
 
