@@ -1,10 +1,4 @@
--- Hop 1 Initial Projects Migration
-CREATE TABLE IF NOT EXISTS schema_migrations (
-    version VARCHAR(255) PRIMARY KEY,
-    name VARCHAR(255) NOT NULL,
-    applied_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-);
-
+-- Hop 1: Create Projects Table
 CREATE TABLE IF NOT EXISTS projects (
     id VARCHAR(36) PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
@@ -14,6 +8,3 @@ CREATE TABLE IF NOT EXISTS projects (
 );
 
 CREATE INDEX IF NOT EXISTS idx_projects_created_at ON projects(created_at DESC);
-
-INSERT INTO schema_migrations (version, name) VALUES ('000001', '000001_create_projects.sql')
-ON CONFLICT (version) DO NOTHING;

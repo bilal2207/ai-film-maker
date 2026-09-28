@@ -1,15 +1,37 @@
+import { useState } from 'react';
+import type { Project } from './types/project';
+import { ProjectList } from './components/ProjectList';
+import { ProjectShell } from './components/ProjectShell';
 import './App.css';
 
 export function App() {
+  const [selectedProject, setSelectedProject] = useState<Project | null>(null);
+
   return (
-    <div className="app-container">
-      <div className="hero-badge">Hop 0 Foundation</div>
-      <h1 className="title">AI Filmmaker</h1>
-      <p className="subtitle">Foundation ready.</p>
-      <div className="status-card">
-        <div className="status-dot"></div>
-        <span className="status-text">System core initialized</span>
-      </div>
+    <div className="app-layout">
+      <header className="app-navbar">
+        <div className="brand">
+          <span className="brand-icon">🎬</span>
+          <h1 className="brand-name">AI Filmmaker</h1>
+          <span className="version-badge">Hop 1</span>
+        </div>
+        <div className="nav-meta">
+          <span className="backend-indicator">
+            <span className="dot"></span> Connected to Go API
+          </span>
+        </div>
+      </header>
+
+      <main className="app-main">
+        {selectedProject ? (
+          <ProjectShell
+            project={selectedProject}
+            onBack={() => setSelectedProject(null)}
+          />
+        ) : (
+          <ProjectList onSelectProject={(project) => setSelectedProject(project)} />
+        )}
+      </main>
     </div>
   );
 }

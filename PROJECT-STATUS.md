@@ -1,7 +1,7 @@
 # AI Filmmaker - Project Status
 
-## Current Hop: Hop 0 (Foundation)
-**Status:** IN PROGRESS
+## Current Hop: Hop 1 (Project System)
+**Status:** COMPLETED
 
 ---
 
@@ -11,49 +11,40 @@ AI-native filmmaking platform spanning the complete production lifecycle:
 
 ---
 
-### Hop 0 Objectives
-- [x] Monorepo structure establishment (`apps/`, `packages/`, `infrastructure/`, `docs/`, `scripts/`)
-- [x] Minimal React + TypeScript + Vite web app (`apps/web`) with health/readiness display and tests
-- [x] Idiomatic Go API service (`apps/api`) with `GET /health` endpoint, test suite, and database connectivity foundation
-- [x] Python FastAPI AI service (`apps/ai`) with `GET /health` endpoint and test suite
-- [x] Local infrastructure definition (`infrastructure/docker-compose.yml`) for PostgreSQL and Redis
-- [x] Database migration scaffolding (`infrastructure/migrations/`)
-- [x] Film DSL & Editor Core placeholder packages (`packages/film-dsl`, `packages/editor-core`)
-- [x] Root guidelines (`AGENTS.md`, `DEVELOPMENT-RULES.md`, `README.md`, `.env.example`)
-- [x] GitHub Actions CI workflow (`.github/workflows/ci.yml`)
+### Hop 1 Objectives & Deliverables
+- [x] Real PostgreSQL connection pool integration in Go API (`apps/api/internal/database/db.go`).
+- [x] Programmatic Go transactional database migration runner (`apps/api/internal/database/migrations/`).
+- [x] Initial `projects` table migration with index on `created_at DESC`.
+- [x] Clean Go architecture boundaries:
+  - Domain models & validation (`apps/api/internal/domain/project.go`).
+  - Repository interface and PostgreSQL implementation (`apps/api/internal/repository/`).
+  - Business logic service layer (`apps/api/internal/service/`).
+  - HTTP handlers and error formatting (`apps/api/internal/handlers/`).
+- [x] Complete REST API endpoints:
+  - `POST /projects` (Create)
+  - `GET /projects` (List)
+  - `GET /projects/:id` (Get by ID)
+  - `PATCH /projects/:id` (Update name/description)
+  - `DELETE /projects/:id` (Delete)
+- [x] Go backend unit tests across service, HTTP handlers, router, and migration reader.
+- [x] Frontend Project System:
+  - React API client connected strictly to Go API (`apps/web/src/api/projects.ts`).
+  - Project List view with creation modal, card grid, delete action, empty and error states.
+  - Project Shell view displaying project metadata and back navigation.
+  - Vitest component and unit test suite.
+- [x] Documentation updates: `docs/ARCHITECTURE.md`, `docs/DATABASE.md`.
 
 ---
 
-### Completed Work
-- Scaffolded root monorepo directories and configuration.
-- Configured React + TypeScript + Vite frontend with Vitest and ESLint.
-- Configured Go REST API with standard library HTTP mux, structured JSON response, health check, and Go unit tests.
-- Configured Python FastAPI service with lightweight ASGI setup, health check, and Pytest suite.
-- Configured Docker Compose containing PostgreSQL 16 and Redis 7.
-- Defined base migration scripts and database connection patterns.
-- Configured CI pipeline covering frontend, backend, and AI service testing and linting.
+### Intentional Limitations & Deferred Features
+1. **Authentication:** User identity and multi-tenant auth (Clerk) are deferred to future hops; projects are currently accessible globally in local development.
+2. **Scenes / Shots / Timeline / NLE:** No scenes, shots, timeline tracks, media uploads, or editor engines were implemented in Hop 1.
+3. **AI Integration:** Python AI service remains untouched and isolated behind the Go API gateway.
+4. **Binary Storage & Transcoding:** S3 and FFmpeg pipelines remain deferred to their designated media pipeline hops.
 
 ---
 
-### Current Work
-- Verifying local runtime execution, unit tests, and health endpoints.
-
----
-
-### Known Issues
-- None.
-
----
-
-### Architectural Decisions
-1. **Lightweight Monorepo:** Avoided bulky JS-only monorepo managers (e.g. Nx, Turborepo) at Hop 0 to keep multi-language (Go, Python, TypeScript) boundaries clean and simple.
-2. **Minimal ML Footprint at Hop 0:** Deferred heavy ML dependencies (PyTorch, Transformers, CUDA) until AI feature hops commence to keep CI/dev cycle fast.
-3. **Strict Boundaries:** Frontend communicates strictly with Go API; AI communicates via contracts with Go API.
-4. **Database Status:** PostgreSQL infrastructure and connection abstraction scaffolded; actual application database connectivity is deferred to Hop 1.
-
----
-
-### Next Hop: Hop 1
-- Initial Script & Storyboard Data Models
-- Database Schema and Migration Execution
-- Basic Project CRUD via Go API
+### Next Hop: Hop 2
+- Script & Storyboard Data Models
+- Scene and Shot Decomposition API
+- Film DSL Schema Generation Foundation

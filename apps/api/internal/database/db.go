@@ -1,36 +1,55 @@
 package database
 
 import (
+	"context"
 	"database/sql"
 	"fmt"
 	"time"
+
+	_ "github.com/lib/pq"
 )
 
-type DB struct {
-	conn *sql.DB
+type Config struct {
+	URL             string
+	MaxOpenConns    int
+	MaxIdleConns    int
+	ConnMaxLifetime time.Duration
 }
 
-// Connect creates a database connection pool foundation.
-// Note: Driver registration should occur when importing postgres driver (e.g. pgx/pq in future hops).
-func Connect(databaseURL string) (*DB, error) {
-	if databaseURL == "" {
+func Connect(cfg Config) (*sql.DB, error) {
+	if cfg.URL == "" {
 		return nil, fmt.Errorf("database URL cannot be empty")
 	}
 
-	return &DB{}, nil
-}
-
-func (db *DB) Ping() error {
-	if db.conn == nil {
-		return nil
+	db, err := sql.Open("postgres", cfg.URL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open database: %w", err)
 	}
-	return db.conn.Ping()
-}
 
-func (db *DB) SetConnLimits(maxOpen, maxIdle int, maxLifetime time.Duration) {
-	if db.conn != nil {
-		db.conn.SetMaxOpenConns(maxOpen)
-		db.conn.SetMaxIdleConns(maxIdle)
-		db.conn.SetConnMaxLifetime(maxLifetime)
+	if cfg.MaxOpenConns > 0 {
+		db.SetMaxOpenConns(cfg.MaxOpenConns)
+	} else {
+		db.SetMaxOpenConns(25)
 	}
+
+	if cfg.MaxIdleConns > 0 {
+		db.SetMaxIdleConns(cfg.MaxIdleConns)
+	} else {
+		db.SetMaxIdleConns(10)
+	}
+
+	if cfg.ConnMaxLifetime > 0 {
+		db.SetConnMaxLifetime(cfg.ConnMaxLifetime)
+	} else {
+		db.SetConnMaxLifetime(5 * time.Minute)
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if err := db.PingContext(ctx); err != nil {
+		return nil, fmt.Errorf("failed to ping database: %w", err)
+	}
+
+	return db, nil
 }
