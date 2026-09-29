@@ -44,6 +44,16 @@ func (m *mockMediaRepo) ListByProjectID(ctx context.Context, projectID string) (
 	return list, nil
 }
 
+func (m *mockMediaRepo) ListByStatus(ctx context.Context, status domain.MediaStatus) ([]*domain.MediaAsset, error) {
+	var list []*domain.MediaAsset
+	for _, a := range m.assets {
+		if a.Status == status {
+			list = append(list, a)
+		}
+	}
+	return list, nil
+}
+
 func (m *mockMediaRepo) Update(ctx context.Context, a *domain.MediaAsset) error {
 	if _, ok := m.assets[a.ID]; !ok {
 		return domain.ErrMediaNotFound
@@ -135,6 +145,17 @@ func (p *mockProcessor) GenerateThumbnail(ctx context.Context, inputPath, output
 	return os.WriteFile(outputPath, []byte("dummy-thumbnail-jpg-data"), 0644)
 }
 
+type failingQueue struct {
+	err error
+}
+
+func (q *failingQueue) Enqueue(job media.Job) error {
+	return q.err
+}
+
+func (q *failingQueue) Start(workers int, handler media.JobHandler) {}
+func (q *failingQueue) Stop()                                       {}
+
 func setupTestMediaService() (*MediaService, *mockMediaRepo, *mockProjectRepo, *mockStorage, *mockProcessor) {
 	mediaRepo := newMockMediaRepo()
 	projectRepo := newMockProjectRepo()
@@ -201,6 +222,92 @@ func TestMediaService_UploadAndComplete(t *testing.T) {
 	})
 }
 
+func TestMediaService_QueueFailure(t *testing.T) {
+	mediaRepo := newMockMediaRepo()
+	projectRepo := newMockProjectRepo()
+	store := newMockStorage()
+	proc := &mockProcessor{}
+	queueErr := errors.New("queue capacity exceeded")
+	fQueue := &failingQueue{err: queueErr}
+
+	svc := NewMediaService(mediaRepo, projectRepo, store, proc, fQueue)
+	ctx := context.Background()
+
+	_ = projectRepo.Create(ctx, &domain.Project{ID: "proj-q", Name: "Queue Test"})
+	objectKey := "projects/proj-q/media/m-q/original/clip.mp4"
+	store.objects[objectKey] = []byte("video bytes")
+
+	_ = mediaRepo.Create(ctx, &domain.MediaAsset{
+		ID:                "m-q",
+		ProjectID:         "proj-q",
+		OriginalObjectKey: objectKey,
+		OriginalFilename:  "clip.mp4",
+		Status:            domain.StatusUploading,
+	})
+
+	// When enqueue fails, CompleteUpload must return error AND media must transition to FAILED
+	completed, err := svc.CompleteUpload(ctx, "proj-q", "m-q")
+	if err == nil {
+		t.Fatalf("expected error from CompleteUpload when queue fails, got %v", completed)
+	}
+
+	asset, getErr := mediaRepo.GetByID(ctx, "m-q")
+	if getErr != nil {
+		t.Fatalf("failed to get asset: %v", getErr)
+	}
+	if asset.Status != domain.StatusFailed {
+		t.Errorf("expected status FAILED after enqueue failure, got %s", asset.Status)
+	}
+	if asset.ErrorMessage == nil || *asset.ErrorMessage == "" {
+		t.Errorf("expected error message to be set when enqueue fails")
+	}
+}
+
+func TestMediaService_StartupReconciliation(t *testing.T) {
+	mediaRepo := newMockMediaRepo()
+	projectRepo := newMockProjectRepo()
+	store := newMockStorage()
+	proc := &mockProcessor{}
+
+	ctx := context.Background()
+	_ = projectRepo.Create(ctx, &domain.Project{ID: "p-rec", Name: "Recon Test"})
+
+	// Create an orphaned PROCESSING asset
+	_ = mediaRepo.Create(ctx, &domain.MediaAsset{
+		ID:                "m-orphaned",
+		ProjectID:         "p-rec",
+		OriginalObjectKey: "projects/p-rec/media/m-orphaned/original/take.mp4",
+		OriginalFilename:  "take.mp4",
+		Status:            domain.StatusProcessing,
+	})
+
+	// Create a READY asset that shouldn't be changed
+	_ = mediaRepo.Create(ctx, &domain.MediaAsset{
+		ID:                "m-ready",
+		ProjectID:         "p-rec",
+		OriginalObjectKey: "projects/p-rec/media/m-ready/original/take2.mp4",
+		OriginalFilename:  "take2.mp4",
+		Status:            domain.StatusReady,
+	})
+
+	// Initialize service (triggers ReconcileOrphanedProcessing)
+	svc := NewMediaService(mediaRepo, projectRepo, store, proc, nil)
+	_ = svc
+
+	orphaned, _ := mediaRepo.GetByID(ctx, "m-orphaned")
+	if orphaned.Status != domain.StatusFailed {
+		t.Errorf("expected orphaned asset to be reconciled to FAILED, got %s", orphaned.Status)
+	}
+	if orphaned.ErrorMessage == nil || *orphaned.ErrorMessage != "processing interrupted by server restart; retry available" {
+		t.Errorf("unexpected error message: %v", orphaned.ErrorMessage)
+	}
+
+	ready, _ := mediaRepo.GetByID(ctx, "m-ready")
+	if ready.Status != domain.StatusReady {
+		t.Errorf("expected ready asset to remain READY, got %s", ready.Status)
+	}
+}
+
 func TestMediaService_ProcessingPipeline(t *testing.T) {
 	svc, mediaRepo, _, store, proc := setupTestMediaService()
 	ctx := context.Background()
@@ -234,6 +341,13 @@ func TestMediaService_ProcessingPipeline(t *testing.T) {
 		}
 		if updated.ProxyObjectKey == nil {
 			t.Errorf("expected proxy object key to be populated")
+		}
+	})
+
+	t.Run("repeated processing of READY asset is idempotent", func(t *testing.T) {
+		err := svc.ProcessMedia(ctx, mediaID)
+		if err != nil {
+			t.Fatalf("expected nil on repeated processing of READY asset, got %v", err)
 		}
 	})
 

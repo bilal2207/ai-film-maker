@@ -108,6 +108,49 @@ func (r *PostgresMediaRepository) ListByProjectID(ctx context.Context, projectID
 	return assets, nil
 }
 
+func (r *PostgresMediaRepository) ListByStatus(ctx context.Context, status domain.MediaStatus) ([]*domain.MediaAsset, error) {
+	query := `
+		SELECT
+			id, project_id, original_object_key, proxy_object_key, thumbnail_object_key,
+			original_filename, mime_type, file_size, duration, width, height, fps,
+			status, error_message, created_at, updated_at
+		FROM media_assets
+		WHERE status = $1
+		ORDER BY created_at ASC;
+	`
+	rows, err := r.db.QueryContext(ctx, query, string(status))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query media assets by status: %w", err)
+	}
+	defer rows.Close()
+
+	var assets []*domain.MediaAsset
+	for rows.Next() {
+		var m domain.MediaAsset
+		var statusStr string
+		err := rows.Scan(
+			&m.ID, &m.ProjectID, &m.OriginalObjectKey, &m.ProxyObjectKey, &m.ThumbnailObjectKey,
+			&m.OriginalFilename, &m.MimeType, &m.FileSize, &m.Duration, &m.Width, &m.Height, &m.FPS,
+			&statusStr, &m.ErrorMessage, &m.CreatedAt, &m.UpdatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to scan media asset row: %w", err)
+		}
+		m.Status = domain.MediaStatus(statusStr)
+		assets = append(assets, &m)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("row iteration error: %w", err)
+	}
+
+	if assets == nil {
+		assets = []*domain.MediaAsset{}
+	}
+
+	return assets, nil
+}
+
 func (r *PostgresMediaRepository) Update(ctx context.Context, m *domain.MediaAsset) error {
 	query := `
 		UPDATE media_assets

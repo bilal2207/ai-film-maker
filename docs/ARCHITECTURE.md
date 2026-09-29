@@ -6,10 +6,10 @@ AI Filmmaker is an AI-native filmmaking platform designed around strict subsyste
 
 ```text
 React / TypeScript (apps/web)
-        ↓ (REST API / Storage Upload)
+        ↓ (REST API / Direct Storage Upload)
       Go API (apps/api)
         ↓
- PostgreSQL / Local/S3 Storage / Background Worker (infrastructure)
+ PostgreSQL / Local Storage / Background Worker (infrastructure)
         ↓ (HTTP / gRPC)
  Python AI services (apps/ai)
 ```
@@ -36,9 +36,9 @@ React / TypeScript (apps/web)
   - `internal/domain/`: Domain entities and request validation logic (`Project`, `MediaAsset`, `MediaStatus`, `MediaMetadata`).
   - `internal/repository/`: Abstract persistence interfaces (`ProjectRepository`, `MediaRepository`) and PostgreSQL implementations.
   - `internal/service/`: Business rules, validation, timestamp orchestration, and UUID generation (`ProjectService`, `MediaService`).
-  - `internal/storage/`: Object storage abstraction (`Storage` interface, `LocalStorage`, `S3Storage`).
+  - `internal/storage/`: Object storage abstraction (`Storage` interface, `LocalStorage`, `key.go` validation).
   - `internal/media/`: Video processing (`FFmpegProcessor` for ffprobe inspection, proxy transcoding, and thumbnail extraction) and background dispatching (`media.Queue` interface and `MemoryQueue`).
-  - `internal/handlers/`: HTTP request dispatching, JSON decoding, status code management, local storage file serving, and structured error responses.
+  - `internal/handlers/`: HTTP request dispatching, JSON decoding, status code management, local storage file serving, stream limits (5GB MaxBytesReader), and structured error responses.
   - `internal/database/migrations/`: Embeddable transactional SQL migration runner.
 
 ### 3. Media Ingestion Pipeline (Hop 2)
@@ -52,12 +52,12 @@ Go API (Validates request, creates MediaAsset with status UPLOADING, generates p
 Client Browser
    │ 3. PUT raw video directly to Storage URL
    ▼
-Object Storage (Stores raw media at projects/:projectId/media/raw/:objectKey)
+Object Storage (Stores raw media under projects/:projectId/media/:mediaId/original/:filename)
    │
 Client Browser
    │ 4. POST /projects/:id/media/:id/complete
    ▼
-Go API (Verifies file existence in storage, sets status to PROCESSING, enqueues to Worker Queue)
+Go API (Verifies file existence in storage, enqueues to Worker Queue, then sets status to PROCESSING)
    │ 5. Asynchronous Background Job
    ▼
 Worker (FFmpeg / FFprobe)
@@ -68,12 +68,22 @@ Worker (FFmpeg / FFprobe)
    └── E. Update MediaAsset in PostgreSQL (status = READY, object keys, dimensions, duration, fps)
 ```
 
-### 4. Background Processing Boundary
-- An explicit `media.Queue` interface separates the HTTP handler lifecycle from the CPU-heavy transcoding jobs.
-- For Hop 2, a thread-safe, bounded in-memory worker queue is used without requiring Kafka or RabbitMQ.
-- In future enterprise production hops, this interface will be swapped directly to Temporal workflows without altering the Go domain or service layers.
+### 4. Background Processing & Queue Boundary
+- **Queue Interface:** Heavy transcoding jobs are decoupled behind the `media.Queue` interface.
+- **Hop 2 In-Memory Worker Pool:** Bounded, thread-safe in-memory worker queue (`MemoryQueue`).
+- **Restart / Crash Limitations & Startup Reconciliation:**
+  - `MemoryQueue` is non-durable across process restarts and crashes. In-flight jobs can be interrupted by a process restart.
+  - On API startup, `ReconcileOrphanedProcessing` automatically scans for any assets left in `PROCESSING` status from a previous crashed run and marks them as `FAILED` with a diagnostic error message (`"processing interrupted by server restart; retry available"`).
+  - This ensures assets are never permanently stuck in `PROCESSING`.
+  - In a future enterprise hop, the `media.Queue` interface will be backed by Temporal without modifying service/domain layers.
 
-### 5. Python AI Service (`apps/ai`)
+### 5. Storage Driver & Path Traversal Security
+- **Supported Driver in Hop 2:** `local` (`LocalStorage`) is the sole supported driver in Hop 2. The factory explicitly rejects `"s3"` or undefined external drivers with an unsupported driver error to prevent fake implementations.
+- **Centralized Key Validation:** All storage keys are validated against strict whitelist patterns (`projects/{projectId}/media/{...}`). Absolute paths, Windows drive letters, null bytes, backslashes, and `..` traversal sequences are strictly rejected.
+- **Base Directory Confinement:** Local filesystem paths are resolved and verified with `filepath.Rel` to guarantee they remain strictly inside the configured `baseDir`.
+- **Stream Limit Enforcement:** Storage upload endpoints enforce a strict 5GB limit via `http.MaxBytesReader`. Partial files are deleted immediately if the stream aborts.
+
+### 6. Python AI Service (`apps/ai`)
 - **Technology:** Python 3.10+, FastAPI, `uv`.
 - **Role:** AI/ML workload orchestration, model inference, and Film DSL generation.
 - **Boundaries:** Only reachable by internal Go backend calls (via HTTP/gRPC).
@@ -82,8 +92,9 @@ Worker (FFmpeg / FFprobe)
 
 ## Architectural Decisions Log
 
-1. **Direct-to-Storage Presigned Uploads:** Raw video files are never proxied or streamed through the Go API web server memory, eliminating backend bandwidth bottlenecks.
-2. **Storage Abstraction:** The `Storage` interface allows local filesystem operations for dev/testing (`LocalStorage`) and S3-compatible cloud buckets in production without code changes.
-3. **Deterministic Object Key Isolation:** Media files are partitioned under `projects/<projectId>/media/{raw,proxies,thumbnails}/<filename>`.
+1. **Direct-to-Storage Presigned Uploads:** Raw video files are uploaded directly to the storage provider URL with a 5GB maximum body stream limit.
+2. **Local-Only Storage for Hop 2:** `LocalStorage` is the only supported driver for this hop, with strict path traversal confinement and clean error handling.
+3. **Deterministic Object Key Isolation:** Media files are partitioned under `projects/<projectId>/media/<mediaId>/{original,proxy,thumbnails}/<filename>`.
 4. **Server-Side Metadata Enforcement:** Client-provided dimensions, FPS, or durations are never trusted. The server runs `ffprobe` to derive definitive technical parameters.
-5. **Idempotent Retry Safety:** If media processing fails, it marks status as `FAILED` with an error message; re-processing can safely overwrite proxy and thumbnail object keys deterministically without corrupting database records.
+5. **Deterministic Queue Enqueueing:** `CompleteUpload` only transitions the database record to `PROCESSING` if enqueueing succeeds; if enqueueing fails, the asset is saved as `FAILED` and an error is returned.
+6. **Retry Semantics:** Failed media assets can be retried via `CompleteUpload` (transitioning `FAILED` -> `PROCESSING`), and `ProcessMedia` is idempotent on `READY` assets.

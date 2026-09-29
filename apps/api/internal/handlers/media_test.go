@@ -7,11 +7,14 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/ai-filmmaker/api/internal/domain"
+	"github.com/ai-filmmaker/api/internal/media"
 	"github.com/ai-filmmaker/api/internal/service"
+	"github.com/ai-filmmaker/api/internal/storage"
 )
 
 type mockMediaRepoForHandler struct {
@@ -39,6 +42,16 @@ func (m *mockMediaRepoForHandler) ListByProjectID(ctx context.Context, projectID
 	var list []*domain.MediaAsset
 	for _, a := range m.assets {
 		if a.ProjectID == projectID {
+			list = append(list, a)
+		}
+	}
+	return list, nil
+}
+
+func (m *mockMediaRepoForHandler) ListByStatus(ctx context.Context, status domain.MediaStatus) ([]*domain.MediaAsset, error) {
+	var list []*domain.MediaAsset
+	for _, a := range m.assets {
+		if a.Status == status {
 			list = append(list, a)
 		}
 	}
@@ -103,7 +116,8 @@ func setupTestMediaHandler() (http.Handler, *mockMediaRepoForHandler, *inMemoryR
 		Name: "Sci-Fi Film",
 	})
 
-	mediaSvc := service.NewMediaService(mediaRepo, projectRepo, &mockStorageAdapter{mediaRepo}, nil, nil)
+	q := media.NewMemoryQueue(10)
+	mediaSvc := service.NewMediaService(mediaRepo, projectRepo, &mockStorageAdapter{mediaRepo}, nil, q)
 	h := NewMediaHandler(mediaSvc)
 
 	mux := http.NewServeMux()
@@ -206,6 +220,89 @@ func TestMediaHandler_HTTPFlow(t *testing.T) {
 
 		if len(mediaRepo.assets) != 0 {
 			t.Errorf("expected media to be deleted from repo")
+		}
+	})
+}
+
+func TestStorageHandler_SecurityAndLimits(t *testing.T) {
+	tempDir, err := os.MkdirTemp("", "handler_storage_sec_*")
+	if err != nil {
+		t.Fatalf("failed to create temp dir: %v", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	store, err := storage.NewLocalStorage(tempDir, "http://localhost:8080")
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+
+	handler := NewStorageHandler(store)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/storage/upload/", handler.Upload)
+	mux.HandleFunc("/storage/download/", handler.Download)
+
+	t.Run("upload with traversal key rejected 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/storage/upload/projects/p1/media/m1/../../../outside.txt", bytes.NewBufferString("attack"))
+		rr := httptest.NewRecorder()
+		handler.Upload(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for traversal upload, got %d: %s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("upload outside AI media namespace rejected 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/storage/upload/some_random_file.txt", bytes.NewBufferString("data"))
+		rr := httptest.NewRecorder()
+		handler.Upload(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for non-AI namespace upload, got %d", rr.Code)
+		}
+	})
+
+	t.Run("upload with oversized ContentLength rejected 413", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPut, "/storage/upload/projects/p1/media/m1/original/take.mp4", bytes.NewBufferString("small body"))
+		req.ContentLength = 6 * 1024 * 1024 * 1024 // 6 GB
+		rr := httptest.NewRecorder()
+		handler.Upload(rr, req)
+
+		if rr.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("expected 413 Payload Too Large, got %d: %s", rr.Code, rr.Body.String())
+		}
+	})
+
+	t.Run("download with traversal key rejected 400", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/storage/download/projects/p1/media/m1/../../../etc/passwd", nil)
+		rr := httptest.NewRecorder()
+		handler.Download(rr, req)
+
+		if rr.Code != http.StatusBadRequest {
+			t.Errorf("expected 400 Bad Request for traversal download, got %d", rr.Code)
+		}
+	})
+
+	t.Run("valid upload and download succeeds 200", func(t *testing.T) {
+		key := "projects/p1/media/m1/original/take.mp4"
+		content := []byte("valid video payload")
+		req := httptest.NewRequest(http.MethodPut, "/storage/upload/"+key, bytes.NewReader(content))
+		req.Header.Set("Content-Type", "video/mp4")
+		rr := httptest.NewRecorder()
+		mux.ServeHTTP(rr, req)
+
+		if rr.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for valid upload, got %d: %s", rr.Code, rr.Body.String())
+		}
+
+		downReq := httptest.NewRequest(http.MethodGet, "/storage/download/"+key, nil)
+		downRR := httptest.NewRecorder()
+		mux.ServeHTTP(downRR, downReq)
+
+		if downRR.Code != http.StatusOK {
+			t.Fatalf("expected 200 OK for valid download, got %d: %s", downRR.Code, downRR.Body.String())
+		}
+		if !bytes.Equal(downRR.Body.Bytes(), content) {
+			t.Errorf("download content does not match uploaded content")
 		}
 	})
 }

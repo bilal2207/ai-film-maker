@@ -47,19 +47,19 @@ Represents video takes, footage, audio, and media files ingested into a project.
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
-| `id` | `VARCHAR(36)` | `PRIMARY KEY` | Media asset UUID |
-| `project_id` | `VARCHAR(36)` | `NOT NULL, REFERENCES projects(id) ON DELETE CASCADE` | Foreign key linking media to parent project |
-| `original_object_key` | `VARCHAR(1024)` | `NOT NULL` | Storage object key for the raw uploaded file |
-| `proxy_object_key` | `VARCHAR(1024)` | `NULL` | Storage object key for 720p H.264 browser proxy |
-| `thumbnail_object_key` | `VARCHAR(1024)` | `NULL` | Storage object key for generated JPEG thumbnail |
-| `original_filename` | `VARCHAR(512)` | `NOT NULL` | Original sanitized file name |
-| `mime_type` | `VARCHAR(128)` | `NOT NULL` | MIME type (e.g. `video/mp4`, `video/quicktime`) |
+| `id` | `VARCHAR(36)` | `PRIMARY KEY` | Media asset UUID string |
+| `project_id` | `VARCHAR(36)` | `NOT NULL REFERENCES projects(id) ON DELETE CASCADE` | Foreign key linking media to parent project |
+| `original_object_key` | `TEXT` | `NOT NULL` | Storage object key for the raw uploaded file |
+| `proxy_object_key` | `TEXT` | `NULL` | Storage object key for 720p H.264 browser proxy |
+| `thumbnail_object_key` | `TEXT` | `NULL` | Storage object key for generated JPEG thumbnail |
+| `original_filename` | `VARCHAR(255)` | `NOT NULL` | Original sanitized file name |
+| `mime_type` | `VARCHAR(100)` | `NOT NULL` | MIME type (e.g. `video/mp4`, `video/quicktime`) |
 | `file_size` | `BIGINT` | `NOT NULL DEFAULT 0` | File size in bytes |
-| `duration` | `DOUBLE PRECISION` | `NULL` | Extracted duration in seconds |
-| `width` | `INT` | `NULL` | Video width in pixels |
-| `height` | `INT` | `NULL` | Video height in pixels |
-| `fps` | `DOUBLE PRECISION` | `NULL` | Video frames per second |
-| `status` | `VARCHAR(32)` | `NOT NULL DEFAULT 'UPLOADING'` | Lifecycle status (`UPLOADING`, `PROCESSING`, `READY`, `FAILED`) |
+| `duration` | `DOUBLE PRECISION` | `NOT NULL DEFAULT 0` | Extracted duration in seconds |
+| `width` | `INTEGER` | `NOT NULL DEFAULT 0` | Video width in pixels |
+| `height` | `INTEGER` | `NOT NULL DEFAULT 0` | Video height in pixels |
+| `fps` | `DOUBLE PRECISION` | `NOT NULL DEFAULT 0` | Video frames per second |
+| `status` | `VARCHAR(50)` | `NOT NULL DEFAULT 'UPLOADING'` | Lifecycle status (`UPLOADING`, `PROCESSING`, `READY`, `FAILED`) |
 | `error_message` | `TEXT` | `NULL` | Error details if status is `FAILED` |
 | `created_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Record creation timestamp |
 | `updated_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Last updated timestamp |
@@ -67,7 +67,7 @@ Represents video takes, footage, audio, and media files ingested into a project.
 #### Indexes & Constraints
 - Foreign key: `fk_media_assets_project_id` references `projects(id)` with `ON DELETE CASCADE`.
 - Index: `idx_media_assets_project_id` on `media_assets(project_id)` for rapid project asset queries.
-- Index: `idx_media_assets_status` on `media_assets(status)` for worker queue querying.
+- Index: `idx_media_assets_status` on `media_assets(status)` for worker queue querying and startup reconciliation.
 - Index: `idx_media_assets_created_at` on `media_assets(created_at DESC)` for reverse chronological display.
 
 ---

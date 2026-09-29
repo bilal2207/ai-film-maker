@@ -21,7 +21,7 @@ type Storage interface {
 }
 
 // LocalStorage implements Storage interface using the local filesystem.
-// Ideal for local development, CI testing, and offline workflows without AWS S3 credentials.
+// Enforces path confinement within baseDir to prevent traversal attacks.
 type LocalStorage struct {
 	baseDir string
 	baseURL string
@@ -31,34 +31,65 @@ func NewLocalStorage(baseDir, baseURL string) (*LocalStorage, error) {
 	if baseDir == "" {
 		baseDir = "./data/storage"
 	}
-	if err := os.MkdirAll(baseDir, 0755); err != nil {
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("failed to resolve local storage path: %w", err)
+	}
+	if err := os.MkdirAll(absBase, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create local storage directory: %w", err)
 	}
 	baseURL = strings.TrimSuffix(baseURL, "/")
 	return &LocalStorage{
-		baseDir: baseDir,
+		baseDir: absBase,
 		baseURL: baseURL,
 	}, nil
 }
 
-func (s *LocalStorage) getFilePath(key string) string {
-	cleanKey := filepath.Clean(key)
-	return filepath.Join(s.baseDir, cleanKey)
+func (s *LocalStorage) getFilePath(key string) (string, error) {
+	if err := ValidateStorageKey(key); err != nil {
+		return "", err
+	}
+
+	absBase, err := filepath.Abs(s.baseDir)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve storage base dir: %w", err)
+	}
+
+	target := filepath.Join(absBase, filepath.FromSlash(key))
+	absTarget, err := filepath.Abs(target)
+	if err != nil {
+		return "", fmt.Errorf("failed to resolve target path: %w", err)
+	}
+
+	rel, err := filepath.Rel(absBase, absTarget)
+	if err != nil || strings.HasPrefix(rel, "..") || (rel == "." && key != "") {
+		return "", ErrStorageTraversal
+	}
+
+	return absTarget, nil
 }
 
 func (s *LocalStorage) CreateUploadURL(ctx context.Context, key string, mimeType string, expiry time.Duration) (string, error) {
-	// Returns direct endpoint served by Go API for local upload
+	if err := ValidateStorageKey(key); err != nil {
+		return "", err
+	}
 	encodedKey := strings.ReplaceAll(key, "\\", "/")
 	return fmt.Sprintf("%s/storage/upload/%s", s.baseURL, encodedKey), nil
 }
 
 func (s *LocalStorage) CreateDownloadURL(ctx context.Context, key string, expiry time.Duration) (string, error) {
+	if err := ValidateStorageKey(key); err != nil {
+		return "", err
+	}
 	encodedKey := strings.ReplaceAll(key, "\\", "/")
 	return fmt.Sprintf("%s/storage/download/%s", s.baseURL, encodedKey), nil
 }
 
 func (s *LocalStorage) HeadObject(ctx context.Context, key string) (bool, int64, error) {
-	filePath := s.getFilePath(key)
+	filePath, err := s.getFilePath(key)
+	if err != nil {
+		return false, 0, err
+	}
 	info, err := os.Stat(filePath)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -70,7 +101,10 @@ func (s *LocalStorage) HeadObject(ctx context.Context, key string) (bool, int64,
 }
 
 func (s *LocalStorage) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {
-	filePath := s.getFilePath(key)
+	filePath, err := s.getFilePath(key)
+	if err != nil {
+		return nil, err
+	}
 	file, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to open storage file: %w", err)
@@ -79,7 +113,11 @@ func (s *LocalStorage) GetObject(ctx context.Context, key string) (io.ReadCloser
 }
 
 func (s *LocalStorage) PutObject(ctx context.Context, key string, body io.Reader, size int64, mimeType string) error {
-	filePath := s.getFilePath(key)
+	filePath, err := s.getFilePath(key)
+	if err != nil {
+		return err
+	}
+
 	if err := os.MkdirAll(filepath.Dir(filePath), 0755); err != nil {
 		return fmt.Errorf("failed to create parent directories: %w", err)
 	}
@@ -88,17 +126,25 @@ func (s *LocalStorage) PutObject(ctx context.Context, key string, body io.Reader
 	if err != nil {
 		return fmt.Errorf("failed to create destination file: %w", err)
 	}
-	defer dst.Close()
 
-	if _, err := io.Copy(dst, body); err != nil {
-		return fmt.Errorf("failed to write object content: %w", err)
+	_, copyErr := io.Copy(dst, body)
+	dst.Close()
+
+	if copyErr != nil {
+		// Clean up partially written file on error (e.g. if MaxBytesReader aborted stream)
+		_ = os.Remove(filePath)
+		return fmt.Errorf("failed to write object content: %w", copyErr)
 	}
+
 	return nil
 }
 
 func (s *LocalStorage) DeleteObject(ctx context.Context, key string) error {
-	filePath := s.getFilePath(key)
-	err := os.Remove(filePath)
+	filePath, err := s.getFilePath(key)
+	if err != nil {
+		return err
+	}
+	err = os.Remove(filePath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("failed to delete storage file: %w", err)
 	}
@@ -106,7 +152,10 @@ func (s *LocalStorage) DeleteObject(ctx context.Context, key string) error {
 }
 
 func (s *LocalStorage) GetLocalPath(ctx context.Context, key string) (string, error) {
-	filePath := s.getFilePath(key)
+	filePath, err := s.getFilePath(key)
+	if err != nil {
+		return "", err
+	}
 	if _, err := os.Stat(filePath); err != nil {
 		return "", err
 	}

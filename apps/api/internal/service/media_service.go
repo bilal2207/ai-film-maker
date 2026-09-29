@@ -46,7 +46,43 @@ func NewMediaService(
 		queue.Start(2, svc.handleBackgroundJob)
 	}
 
+	// Reconcile orphaned processing records from prior process runs/crashes
+	if mediaRepo != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := svc.ReconcileOrphanedProcessing(ctx); err != nil {
+			log.Printf("[MediaService] Warning: failed to reconcile orphaned processing assets: %v", err)
+		}
+	}
+
 	return svc
+}
+
+// ReconcileOrphanedProcessing reconciles any media assets left in PROCESSING status across API restarts.
+// Because the in-memory queue is not durable across restarts, in-flight jobs are marked as FAILED with
+// a clear diagnostic message allowing the user/system to retry.
+func (s *MediaService) ReconcileOrphanedProcessing(ctx context.Context) error {
+	if s.mediaRepo == nil {
+		return nil
+	}
+
+	processingAssets, err := s.mediaRepo.ListByStatus(ctx, domain.StatusProcessing)
+	if err != nil {
+		return fmt.Errorf("failed to list processing assets: %w", err)
+	}
+
+	for _, asset := range processingAssets {
+		log.Printf("[MediaService] Reconciling orphaned processing asset %s (project %s)...", asset.ID, asset.ProjectID)
+		errMsg := "processing interrupted by server restart; retry available"
+		asset.Status = domain.StatusFailed
+		asset.ErrorMessage = &errMsg
+		asset.UpdatedAt = time.Now().UTC()
+		if err := s.mediaRepo.Update(ctx, asset); err != nil {
+			log.Printf("[MediaService] Failed to update orphaned asset %s: %v", asset.ID, err)
+		}
+	}
+
+	return nil
 }
 
 func (s *MediaService) handleBackgroundJob(ctx context.Context, job media.Job) error {
@@ -131,7 +167,7 @@ func (s *MediaService) CompleteUpload(ctx context.Context, projectID, mediaID st
 		return nil, domain.ErrMediaNotBelongToProject
 	}
 
-	// 3. Validate status transition
+	// 3. Validate status transition (supports UPLOADING -> PROCESSING or FAILED -> PROCESSING for retry)
 	if !asset.CanTransitionTo(domain.StatusProcessing) {
 		return nil, fmt.Errorf("%w: cannot transition from %s to %s", domain.ErrInvalidStatusTransition, asset.Status, domain.StatusProcessing)
 	}
@@ -149,6 +185,27 @@ func (s *MediaService) CompleteUpload(ctx context.Context, projectID, mediaID st
 		asset.FileSize = size
 	}
 
+	// 5. Enqueue background processing job before committing PROCESSING status to database
+	if s.queue == nil {
+		errMsg := "background processing queue is unconfigured"
+		asset.Status = domain.StatusFailed
+		asset.ErrorMessage = &errMsg
+		asset.UpdatedAt = time.Now().UTC()
+		_ = s.mediaRepo.Update(ctx, asset)
+		return nil, errors.New("background processing queue is unconfigured")
+	}
+
+	if err := s.queue.Enqueue(media.Job{MediaID: mediaID, ProjectID: projectID}); err != nil {
+		log.Printf("[MediaService] Failed to enqueue media processing job for media_id=%s: %v", mediaID, err)
+		errMsg := fmt.Sprintf("failed to enqueue media processing: %v", err)
+		asset.Status = domain.StatusFailed
+		asset.ErrorMessage = &errMsg
+		asset.UpdatedAt = time.Now().UTC()
+		_ = s.mediaRepo.Update(ctx, asset)
+		return nil, fmt.Errorf("failed to enqueue background job: %w", err)
+	}
+
+	// 6. Transition to PROCESSING and persist
 	asset.Status = domain.StatusProcessing
 	asset.ErrorMessage = nil
 	asset.UpdatedAt = time.Now().UTC()
@@ -157,15 +214,7 @@ func (s *MediaService) CompleteUpload(ctx context.Context, projectID, mediaID st
 		return nil, fmt.Errorf("failed to update media status: %w", err)
 	}
 
-	log.Printf("[MediaService] Media upload completed: media_id=%s, project_id=%s, size=%d bytes. Enqueueing processing.", mediaID, projectID, asset.FileSize)
-
-	// 5. Enqueue background processing job
-	if s.queue != nil {
-		if err := s.queue.Enqueue(media.Job{MediaID: mediaID, ProjectID: projectID}); err != nil {
-			log.Printf("[MediaService] Warning: failed to enqueue media processing job: %v", err)
-		}
-	}
-
+	log.Printf("[MediaService] Media upload completed and enqueued: media_id=%s, project_id=%s, size=%d bytes.", mediaID, projectID, asset.FileSize)
 	return asset, nil
 }
 

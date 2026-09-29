@@ -1,12 +1,14 @@
 package handlers
 
 import (
+	"errors"
 	"io"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"strings"
 
+	"github.com/ai-filmmaker/api/internal/domain"
 	"github.com/ai-filmmaker/api/internal/storage"
 )
 
@@ -26,10 +28,19 @@ func (h *StorageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := strings.TrimPrefix(r.URL.Path, "/storage/upload/")
-	if key == "" {
-		WriteError(w, http.StatusBadRequest, "INVALID_INPUT", "storage key is required")
+	if err := storage.ValidateAIMediaKey(key); err != nil {
+		WriteError(w, http.StatusBadRequest, "INVALID_STORAGE_KEY", "invalid or unauthorized storage key")
 		return
 	}
+
+	// Reject if declared Content-Length exceeds maximum limit
+	if r.ContentLength > domain.MaxAllowedFileSizeBytes {
+		WriteError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "upload exceeds maximum allowed limit of 5GB")
+		return
+	}
+
+	// Limit actual request body stream to 5GB
+	r.Body = http.MaxBytesReader(w, r.Body, domain.MaxAllowedFileSizeBytes)
 
 	contentType := r.Header.Get("Content-Type")
 	if contentType == "" {
@@ -37,6 +48,11 @@ func (h *StorageHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if err := h.store.PutObject(r.Context(), key, r.Body, r.ContentLength, contentType); err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) || strings.Contains(err.Error(), "http: request body too large") {
+			WriteError(w, http.StatusRequestEntityTooLarge, "PAYLOAD_TOO_LARGE", "upload exceeds maximum allowed limit of 5GB")
+			return
+		}
 		WriteError(w, http.StatusInternalServerError, "STORAGE_ERROR", "failed to write object")
 		return
 	}
@@ -55,8 +71,8 @@ func (h *StorageHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key := strings.TrimPrefix(r.URL.Path, "/storage/download/")
-	if key == "" {
-		WriteError(w, http.StatusBadRequest, "INVALID_INPUT", "storage key is required")
+	if err := storage.ValidateAIMediaKey(key); err != nil {
+		WriteError(w, http.StatusBadRequest, "INVALID_STORAGE_KEY", "invalid or unauthorized storage key")
 		return
 	}
 
