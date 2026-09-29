@@ -1,3 +1,8 @@
-# Database Migrations
+# Migrations
 
-Hop 0 migrations are bootstrap migrations executed by PostgreSQL during initial volume creation. A proper migration runner will be introduced in Hop 1.
+All database migrations are managed and applied solely by the Go API migration runner (`apps/api/internal/database/migrations/`).
+
+Migration SQL files are stored in:
+`apps/api/internal/database/migrations/sql/`
+
+Docker Compose runs standard PostgreSQL instances without custom initialization SQL scripts.

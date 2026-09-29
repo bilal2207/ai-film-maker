@@ -13,7 +13,7 @@ export function App() {
         <div className="brand">
           <span className="brand-icon">🎬</span>
           <h1 className="brand-name">AI Filmmaker</h1>
-          <span className="version-badge">Hop 1</span>
+          <span className="version-badge">Hop 2</span>
         </div>
         <div className="nav-meta">
           <span className="backend-indicator">

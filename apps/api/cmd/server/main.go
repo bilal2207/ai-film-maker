@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"database/sql"
 	"log"
 	"time"
 
@@ -13,11 +12,10 @@ import (
 )
 
 func main() {
+	// 1. Load configuration
 	cfg := config.Load()
 
-	var db *sql.DB
-	var err error
-
+	// 2. Connect to PostgreSQL (Required Dependency)
 	dbConfig := database.Config{
 		URL:             cfg.DatabaseURL,
 		MaxOpenConns:    25,
@@ -26,24 +24,23 @@ func main() {
 	}
 
 	log.Printf("Connecting to PostgreSQL at %s...", cfg.DatabaseURL)
-	db, err = database.Connect(dbConfig)
+	db, err := database.Connect(dbConfig)
 	if err != nil {
-		log.Printf("Warning: Database connection could not be established: %v", err)
-		log.Println("Starting server without active database connection (health endpoint available).")
-	} else {
-		defer db.Close()
-		log.Println("PostgreSQL connection established.")
-
-		// Run database migrations
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
-
-		if err := migrations.Run(ctx, db); err != nil {
-			log.Fatalf("Failed to execute database migrations: %v", err)
-		}
-		log.Println("Database migrations up to date.")
+		log.Fatalf("Fatal: Failed to connect to PostgreSQL: %v", err)
 	}
+	defer db.Close()
+	log.Println("PostgreSQL connection established.")
 
+	// 3. Run database migrations (Required Dependency)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if err := migrations.Run(ctx, db); err != nil {
+		log.Fatalf("Fatal: Failed to execute database migrations: %v", err)
+	}
+	log.Println("Database migrations up to date.")
+
+	// 4. Start HTTP Server only after successful DB connection & migrations
 	srv := server.New(cfg, db)
 
 	log.Printf("Starting AI Filmmaker API server on port %s (env: %s)...", cfg.Port, cfg.Environment)
