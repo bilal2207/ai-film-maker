@@ -1,7 +1,7 @@
 # AI Filmmaker - Project Status
 
-## Current Hop: Hop 2 (Media Ingestion)
-**Status:** COMPLETED & VERIFIED (Reliability & Security Hardened)
+## Current Hop: Hop 3A (Basic NLE: Timeline Domain Model + Persistence)
+**Status:** COMPLETED & VERIFIED
 
 ---
 
@@ -11,66 +11,57 @@ AI-native filmmaking platform spanning the complete production lifecycle:
 
 ---
 
-### Hop 2 Objectives & Deliverables
-- [x] Database schema for media assets (`media_assets` table with `projects(id)` foreign key, cascading delete, and indexes on `project_id`, `status`, and `created_at DESC`).
-- [x] Go domain model & lifecycle state machine (`UPLOADING → PROCESSING → READY` or `FAILED`).
-- [x] Security and validation:
-  - Centralized storage key validation rejecting absolute paths, `..` traversal, backslashes, null bytes, and Windows drive letters.
-  - Strict base directory confinement in `LocalStorage` with automatic cleanup of partial uploads.
-  - Stream-level 5GB body limit enforcement via `http.MaxBytesReader` in storage handlers.
-  - MIME type whitelisting (`video/mp4`, `video/quicktime`, `video/webm`, `video/x-matroska`, etc.).
-  - Filename sanitization (path traversal protection).
-  - Server-side metadata extraction (client duration/resolution never trusted).
-- [x] Storage Abstraction Layer (`apps/api/internal/storage`):
-  - `LocalStorage` provider for zero-dependency local development with byte-range HTTP streaming.
-  - `storage.NewFromConfig` explicitly rejects unsupported drivers (`"s3"`) in Hop 2 to maintain truth in implementation.
-- [x] FFmpeg / FFprobe Media Processing Pipeline:
-  - Portable binary discovery in standard system paths and user tool directories (`.tools/ffmpeg/bin`).
-  - Strict JSON `ffprobe` metadata inspection (duration, width, height, FPS, codec).
-  - 720p H.264 / AAC proxy transcoding for web and editor preview.
-  - Frame extraction for JPEG thumbnail generation.
-- [x] Background Processing & Queue Boundary:
-  - Clean `media.Queue` interface decoupling heavy transcoding from the HTTP request cycle.
-  - Bounded in-memory worker queue with graceful shutdown and worker pooling.
-  - Deterministic queue failure handling: if `queue.Enqueue` fails, the asset transitions to `FAILED` with an error message and does not remain stuck in `PROCESSING`.
-  - Startup reconciliation: `ReconcileOrphanedProcessing` scans for orphaned `PROCESSING` records on server startup and marks them as `FAILED` with retry guidance.
-  - Idempotent processing: repeated processing of `READY` assets is a no-op.
-- [x] Complete REST API endpoints:
-  - `POST /projects/:projectId/media/upload` (Initialize upload & presigned URL)
-  - `POST /projects/:projectId/media/:mediaId/complete` (Finalize upload & enqueue processing, supports retrying failed assets)
-  - `GET /projects/:projectId/media` (List project footage)
-  - `GET /projects/:projectId/media/:mediaId` (Get asset metadata & playback URLs)
-  - `DELETE /projects/:projectId/media/:mediaId` (Delete media & storage objects)
-- [x] Frontend Media Ingestion:
-  - React media API client (`apps/web/src/api/media.ts`).
-  - Direct-to-storage upload with progress percentage tracking.
-  - Media asset cards with thumbnail images, status badges (`READY`, `PROCESSING`, `UPLOADING`, `FAILED`), specs, and delete action.
-  - Automatic polling when jobs are pending/processing.
-  - 720p proxy video player preview modal.
+### Hop 3A Objectives & Deliverables
+- [x] Database schema for timeline system:
+  - `timelines` table (1-to-1 project relationship, cascading delete).
+  - `tracks` table (ordered layers, `VIDEO` / `AUDIO` track types).
+  - `timeline_clips` table (referencing `tracks(id)` and `media_assets(id)` with foreign keys).
+- [x] Canonical Timeline Domain Model (`apps/api/internal/domain/timeline.go`):
+  - Integer microsecond timebase (`int64`, $1\text{s} = 1,000,000\mu\text{s}$).
+  - Clip parameters: `timeline_start`, `source_in`, `source_out`.
+  - Non-redundant duration and timeline_end computation.
+- [x] Domain Invariants & Validation:
+  - `source_in >= 0`, `source_out > source_in`, `timeline_start >= 0`.
+  - Media duration boundary validation (`source_out <= media.duration`).
+  - Track type compatibility (`VIDEO` tracks require video media).
+  - Cross-project media leakage prevention (`media.project_id == project.id`).
+- [x] Same-Track Overlap Policy:
+  - Strict rejection of overlapping clips on the same track (`ErrClipOverlap` / HTTP 409).
+  - Abutting clips allowed.
+  - Multi-track layering permitted across different tracks.
+- [x] Full REST API:
+  - `GET /projects/:projectId/timeline` (Get complete timeline hierarchy or auto-initialize)
+  - `POST /projects/:projectId/timeline` (Create timeline)
+  - `POST /projects/:projectId/timeline/tracks` (Create track)
+  - `PATCH /projects/:projectId/timeline/tracks/:trackId` (Update track)
+  - `DELETE /projects/:projectId/timeline/tracks/:trackId` (Delete track)
+  - `POST /projects/:projectId/timeline/tracks/:trackId/clips` (Create clip)
+  - `PATCH /projects/:projectId/timeline/tracks/:trackId/clips/:clipId` (Update clip)
+  - `DELETE /projects/:projectId/timeline/tracks/:trackId/clips/:clipId` (Delete clip)
 - [x] Comprehensive Testing:
-  - Go domain, storage traversal, factory, repository, queue failure, startup reconciliation, idempotency, and handler tests.
-  - Vitest frontend component tests for upload flow, states, modal, and deletion.
-  - Package builds for `film-dsl` and `editor-core`.
-  - Python AI linting (`ruff`) and test suite (`pytest`).
+  - Go domain tests (timebase, invariants, overlap logic).
+  - Go service tests (ownership validation, overlap rejection, cross-project protection).
+  - Go handler tests (HTTP requests, status codes, error handling).
+- [x] Frontend Types & API Client (`apps/web/src/types/timeline.ts`, `apps/web/src/api/timeline.ts`).
 
 ---
 
 ### Previous Deliverables
 - **Hop 0 / 0.1:** Foundational Monorepo Setup, dependency boundaries, Go API, Python AI service, React frontend, `@ai-filmmaker/film-dsl`, `@ai-filmmaker/editor-core`.
 - **Hop 1:** Project System, PostgreSQL migrations, project CRUD endpoints, frontend Project List and Project Shell.
+- **Hop 2:** Media Ingestion, storage abstraction, FFmpeg proxy/thumbnail pipeline, background queue, path traversal hardening.
 
 ---
 
 ### Intentional Limitations & Deferred Features
-1. **Authentication / Authorization:** Multi-tenant user auth (Clerk) remains deferred; media assets belong to projects without user-based access control.
-2. **Queue Durability:** `MemoryQueue` is in-memory; process restarts interrupt in-flight jobs, which are reconciled to `FAILED` on startup so users can retry. Replacing this with Temporal is deferred to future enterprise hops.
-3. **Cloud S3 Adapter:** Cloud S3 integration is explicitly unsupported in Hop 2; only local storage is supported.
-4. **Timeline / NLE / WebGPU:** Media assets are ingested and proxied; timeline sequencing, clip trimming, and WebGPU canvas rendering are deferred to upcoming editor hops.
-5. **AI Generation / Vision Analysis:** Scene detection, shot tagging, Whisper speech-to-text, and embeddings remain deferred to AI orchestration hops.
+1. **Visual NLE Editor / WebGPU Timeline:** Drag-and-drop timeline, trimming UI, waveform renderers, and WebGPU canvas playback are deferred to upcoming NLE sub-hops (Hop 3B+).
+2. **Compound / Nested Clips:** Timeline sequences are single primary timeline per project.
+3. **Authentication / Authorization:** Multi-tenant user auth (Clerk) remains deferred; media and timelines belong to projects without user-level access control.
+4. **AI Generation / Vision Analysis:** Scene detection, shot tagging, Whisper speech-to-text, and embeddings remain deferred to AI orchestration hops.
 
 ---
 
-### Next Hop: Hop 3
-- Script & Storyboard Data Models
-- Scene and Shot Decomposition API
-- Film DSL Schema Generation Foundation
+### Next Sub-Hop: Hop 3B
+- Editor Core / Timeline Engine integration
+- WebCodecs video frame decoding
+- Canvas / WebGPU timeline preview renderer

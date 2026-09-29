@@ -72,10 +72,73 @@ Represents video takes, footage, audio, and media files ingested into a project.
 
 ---
 
+### `timelines` Table (Hop 3A)
+
+Represents a project's editing timeline sequence.
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `VARCHAR(36)` | `PRIMARY KEY` | Timeline UUID string |
+| `project_id` | `VARCHAR(36)` | `NOT NULL UNIQUE REFERENCES projects(id) ON DELETE CASCADE` | 1-to-1 project ownership relationship |
+| `name` | `VARCHAR(255)` | `NOT NULL DEFAULT 'Main Timeline'` | Sequence display name |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Creation timestamp |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Update timestamp |
+
+#### Indexes & Constraints
+- Unique key: `UNIQUE(project_id)` enforcing single primary timeline per project for initial hops.
+- Index: `idx_timelines_project_id` on `timelines(project_id)`.
+
+---
+
+### `tracks` Table (Hop 3A)
+
+Represents ordered audio/video layers within a timeline.
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `VARCHAR(36)` | `PRIMARY KEY` | Track UUID string |
+| `timeline_id` | `VARCHAR(36)` | `NOT NULL REFERENCES timelines(id) ON DELETE CASCADE` | Parent timeline foreign key |
+| `type` | `VARCHAR(32)` | `NOT NULL` | Track type (`VIDEO` or `AUDIO`) |
+| `name` | `VARCHAR(255)` | `NOT NULL` | Track label (e.g. "Video 1", "Dialogue") |
+| `track_order` | `INTEGER` | `NOT NULL DEFAULT 0` | Explicit ordering index (0-indexed) |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Creation timestamp |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Update timestamp |
+
+#### Indexes & Constraints
+- Index: `idx_tracks_timeline_id` on `tracks(timeline_id, track_order ASC)`.
+
+---
+
+### `timeline_clips` Table (Hop 3A)
+
+Represents placed slices of media assets positioned on a track.
+
+| Column | Type | Constraints | Description |
+| :--- | :--- | :--- | :--- |
+| `id` | `VARCHAR(36)` | `PRIMARY KEY` | Clip UUID string |
+| `track_id` | `VARCHAR(36)` | `NOT NULL REFERENCES tracks(id) ON DELETE CASCADE` | Parent track foreign key |
+| `media_asset_id` | `VARCHAR(36)` | `NOT NULL REFERENCES media_assets(id) ON DELETE CASCADE` | Referenced media asset foreign key |
+| `timeline_start` | `BIGINT` | `NOT NULL` | Timeline placement in microseconds |
+| `source_in` | `BIGINT` | `NOT NULL DEFAULT 0` | Media in-point in microseconds |
+| `source_out` | `BIGINT` | `NOT NULL` | Media out-point in microseconds |
+| `created_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Creation timestamp |
+| `updated_at` | `TIMESTAMP WITH TIME ZONE` | `NOT NULL DEFAULT CURRENT_TIMESTAMP` | Update timestamp |
+
+#### Timing Notes & Invariants
+- `duration` is computed as `source_out - source_in`. Redundant duration columns are intentionally avoided to maintain single-source-of-truth consistency.
+- `timeline_end` is computed as `timeline_start + duration`.
+- Timebase: **Integer Microseconds** (`1 second = 1,000,000 microseconds`).
+
+#### Indexes & Constraints
+- Index: `idx_timeline_clips_track_id` on `timeline_clips(track_id, timeline_start ASC)`.
+- Index: `idx_timeline_clips_media_asset_id` on `timeline_clips(media_asset_id)`.
+
+---
+
 ### `schema_migrations` Table
 
 | Column | Type | Constraints | Description |
 | :--- | :--- | :--- | :--- |
-| `version` | `VARCHAR(255)` | `PRIMARY KEY` | Migration version identifier (e.g. `000001`, `000002`) |
+| `version` | `VARCHAR(255)` | `PRIMARY KEY` | Migration version identifier (e.g. `000001`, `000002`, `000003`) |
 | `name` | `VARCHAR(255)` | `NOT NULL` | Migration file name |
 | `applied_at` | `TIMESTAMP WITH TIME ZONE` | `DEFAULT CURRENT_TIMESTAMP` | Timestamp when migration was committed |

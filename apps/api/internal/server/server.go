@@ -15,21 +15,24 @@ import (
 )
 
 type Server struct {
-	cfg            *config.Config
-	router         *http.ServeMux
-	projectHandler *handlers.ProjectHandler
-	mediaHandler   *handlers.MediaHandler
-	storageHandler *handlers.StorageHandler
+	cfg             *config.Config
+	router          *http.ServeMux
+	projectHandler  *handlers.ProjectHandler
+	mediaHandler    *handlers.MediaHandler
+	timelineHandler *handlers.TimelineHandler
+	storageHandler  *handlers.StorageHandler
 }
 
 // New creates a production server wired to real PostgreSQL, storage, and media processor instances.
 func New(cfg *config.Config, db *sql.DB) *Server {
 	var projectRepo repository.ProjectRepository
 	var mediaRepo repository.MediaRepository
+	var timelineRepo repository.TimelineRepository
 
 	if db != nil {
 		projectRepo = repository.NewPostgresProjectRepository(db)
 		mediaRepo = repository.NewPostgresMediaRepository(db)
+		timelineRepo = repository.NewPostgresTimelineRepository(db)
 	}
 
 	store, err := storage.NewFromConfig(cfg)
@@ -44,12 +47,12 @@ func New(cfg *config.Config, db *sql.DB) *Server {
 
 	queue := media.NewMemoryQueue(100)
 
-	return NewWithDependencies(cfg, projectRepo, mediaRepo, store, processor, queue)
+	return NewWithDependencies(cfg, projectRepo, mediaRepo, timelineRepo, store, processor, queue)
 }
 
 // NewWithRepository allows testing server routing with only project repository.
 func NewWithRepository(cfg *config.Config, projectRepo repository.ProjectRepository) *Server {
-	return NewWithDependencies(cfg, projectRepo, nil, nil, nil, nil)
+	return NewWithDependencies(cfg, projectRepo, nil, nil, nil, nil, nil)
 }
 
 // NewWithDependencies allows explicit dependency injection for unit and integration testing.
@@ -57,6 +60,7 @@ func NewWithDependencies(
 	cfg *config.Config,
 	projectRepo repository.ProjectRepository,
 	mediaRepo repository.MediaRepository,
+	timelineRepo repository.TimelineRepository,
 	store storage.Storage,
 	processor media.Processor,
 	queue media.Queue,
@@ -67,17 +71,24 @@ func NewWithDependencies(
 	mediaService := service.NewMediaService(mediaRepo, projectRepo, store, processor, queue)
 	mediaHandler := handlers.NewMediaHandler(mediaService)
 
+	var timelineHandler *handlers.TimelineHandler
+	if timelineRepo != nil {
+		timelineService := service.NewTimelineService(timelineRepo, projectRepo, mediaRepo)
+		timelineHandler = handlers.NewTimelineHandler(timelineService)
+	}
+
 	var storageHandler *handlers.StorageHandler
 	if store != nil {
 		storageHandler = handlers.NewStorageHandler(store)
 	}
 
 	s := &Server{
-		cfg:            cfg,
-		router:         http.NewServeMux(),
-		projectHandler: projectHandler,
-		mediaHandler:   mediaHandler,
-		storageHandler: storageHandler,
+		cfg:             cfg,
+		router:          http.NewServeMux(),
+		projectHandler:  projectHandler,
+		mediaHandler:    mediaHandler,
+		timelineHandler: timelineHandler,
+		storageHandler:  storageHandler,
 	}
 
 	s.routes()
@@ -87,11 +98,17 @@ func NewWithDependencies(
 func (s *Server) routes() {
 	s.router.HandleFunc("/health", handlers.HealthHandler)
 
-	// Projects and Media multiplexer
+	// Projects, Media, and Timeline multiplexer
 	s.router.HandleFunc("/projects", s.projectHandler.ProjectDispatcher)
 	s.router.HandleFunc("/projects/", func(w http.ResponseWriter, r *http.Request) {
 		if strings.Contains(r.URL.Path, "/media") {
 			s.mediaHandler.MediaDispatcher(w, r)
+		} else if strings.Contains(r.URL.Path, "/timeline") {
+			if s.timelineHandler != nil {
+				s.timelineHandler.TimelineDispatcher(w, r)
+			} else {
+				handlers.WriteError(w, http.StatusNotFound, "NOT_FOUND", "timeline handler unconfigured")
+			}
 		} else {
 			s.projectHandler.ProjectDispatcher(w, r)
 		}
